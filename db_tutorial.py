@@ -1,26 +1,35 @@
 from enum import IntEnum
 
 
-class StopInput(Exception):
-    pass
-
-
 class MetaCommandResult(IntEnum):
+    """
+    元命令枚举
+    """
     META_COMMAND_SUCCESS = 1
     META_COMMAND_UNRECOGNIZED_COMMAND = 2
 
 
 class StatementType(IntEnum):
+    """
+    声明类型枚举
+    """
     STATEMENT_INSERT = 1
     STATEMENT_SELECT = 2
 
 
 class PrepareResult(IntEnum):
+    """
+    预处理状态枚举
+    """
     PREPARE_SUCCESS = 1
     PREPARE_UNRECOGNIZED_STATEMENT = 2
 
 
 class Statement:
+    """
+    命令状态
+    """
+
     def __init__(self):
         self.type = None
 
