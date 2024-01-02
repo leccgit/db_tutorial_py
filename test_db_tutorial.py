@@ -53,6 +53,32 @@ class TestDatabase(unittest.TestCase):
 
         self.assertEqual(result, expected_output)
 
+    def test_keeps_data_after_closing_connection(self):
+        result = self.run_script([
+            "insert 1 user1 person1@example.com",
+            ".exit",
+        ])
+
+        expected_output = [
+            "db > Executed.",
+            "db > ",
+        ]
+
+        self.assertEqual(result, expected_output)
+
+        result = self.run_script([
+            "select",
+            ".exit",
+        ])
+
+        expected_output = [
+            "db > (1, user1, person1@example.com)",
+            "Executed.",
+            "db > ",
+        ]
+
+        self.assertEqual(result, expected_output)
+
 
 if __name__ == "__main__":
     unittest.main()
