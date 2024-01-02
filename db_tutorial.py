@@ -1,5 +1,6 @@
 import struct
 import sys
+from typing import Optional
 
 # 32位整数（I），32字节的字符串（32s），255字节的字符串（255s）
 STRUCT_PACK_FMT = 'I32s255s'
@@ -18,8 +19,10 @@ class PrepareResult:
     预处理结果
     """
     PREPARE_SUCCESS = 0
-    PREPARE_SYNTAX_ERROR = 1
-    PREPARE_UNRECOGNIZED_STATEMENT = 2
+    PREPARE_NEGATIVE_ID = 1
+    PREPARE_STRING_TOO_LONG = 2
+    PREPARE_SYNTAX_ERROR = 3
+    PREPARE_UNRECOGNIZED_STATEMENT = 4
 
 
 class StatementType:
@@ -51,9 +54,12 @@ TABLE_MAX_PAGES = 100
 ROWS_PER_PAGE = PAGE_SIZE // ROW_SIZE
 TABLE_MAX_ROWS = ROWS_PER_PAGE * TABLE_MAX_PAGES
 
+COLUMN_USERNAME_SIZE = 32
+COLUMN_EMAIL_SIZE = 255
+
 
 class Row:
-    def __init__(self, id, username, email):
+    def __init__(self, id=None, username=None, email=None):
         self.id = id
         self.username = username
         self.email = email
@@ -109,7 +115,7 @@ class InputBuffer:
 class Statement:
     def __init__(self):
         self.type = None
-        self.row_to_insert = None
+        self.row_to_insert = Row()
 
 
 def print_prompt():
@@ -131,17 +137,33 @@ def do_meta_command(input_buffer, table: Table):
 
 def prepare_statement(input_buffer: InputBuffer, statement: Statement) -> int:
     if input_buffer.buffer.startswith("insert"):
-        statement.type = StatementType.STATEMENT_INSERT
-        args = input_buffer.buffer.split()
-        if len(args) < 4:
-            return PrepareResult.PREPARE_SYNTAX_ERROR
-        statement.row_to_insert = Row(int(args[1]), args[2], args[3])
-        return PrepareResult.PREPARE_SUCCESS
+        return prepare_insert(input_buffer, statement)
     elif input_buffer.buffer.startswith('select'):
         statement.type = StatementType.STATEMENT_SELECT
         return PrepareResult.PREPARE_SUCCESS
     else:
         return PrepareResult.PREPARE_UNRECOGNIZED_STATEMENT
+
+
+def prepare_insert(input_buffer: InputBuffer, statement: Statement) -> int:
+    statement.type = StatementType.STATEMENT_INSERT
+    tokens = input_buffer.buffer.split()
+    id_string = tokens[1] if len(tokens) > 1 else None
+    username = tokens[2] if len(tokens) > 2 else None
+    email = tokens[3] if len(tokens) > 3 else None
+    if id_string is None or username is None or email is None:
+        return PrepareResult.PREPARE_SYNTAX_ERROR
+    t_id = int(id_string)
+    if t_id < 0:
+        return PrepareResult.PREPARE_NEGATIVE_ID
+    if len(username) > COLUMN_USERNAME_SIZE:
+        return PrepareResult.PREPARE_STRING_TOO_LONG
+    if len(email) > COLUMN_EMAIL_SIZE:
+        return PrepareResult.PREPARE_STRING_TOO_LONG
+    statement.row_to_insert.id = t_id
+    statement.row_to_insert.username = username
+    statement.row_to_insert.email = email
+    return PrepareResult.PREPARE_SUCCESS
 
 
 def execute_insert(statement, table) -> int:
@@ -191,6 +213,10 @@ def main():
                 print("Executed.")
             elif execute_result == ExecuteResult.EXECUTE_TABLE_FULL:
                 print("Error: Table full.")
+        elif prepare_result == PrepareResult.PREPARE_NEGATIVE_ID:
+            print("ID must be positive.")
+        elif prepare_result == PrepareResult.PREPARE_STRING_TOO_LONG:
+            print("String is too long.")
         elif prepare_result == PrepareResult.PREPARE_SYNTAX_ERROR:
             print("Syntax error. Could not parse statement.")
         elif prepare_result == PrepareResult.PREPARE_UNRECOGNIZED_STATEMENT:
