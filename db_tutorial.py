@@ -1,15 +1,42 @@
 import struct
 import sys
 
-META_COMMAND_SUCCESS = 0
-META_COMMAND_UNRECOGNIZED_COMMAND = 1
+# 32位整数（I），32字节的字符串（32s），255字节的字符串（255s）
+STRUCT_PACK_FMT = 'I32s255s'
 
-PREPARE_SUCCESS = 0
-PREPARE_SYNTAX_ERROR = 1
-PREPARE_UNRECOGNIZED_STATEMENT = 2
 
-EXECUTE_SUCCESS = 0
-EXECUTE_TABLE_FULL = 1
+class MetaCommandResult:
+    """
+    命令执行结果
+    """
+    META_COMMAND_SUCCESS = 0
+    META_COMMAND_UNRECOGNIZED_COMMAND = 1
+
+
+class PrepareResult:
+    """
+    预处理结果
+    """
+    PREPARE_SUCCESS = 0
+    PREPARE_SYNTAX_ERROR = 1
+    PREPARE_UNRECOGNIZED_STATEMENT = 2
+
+
+class StatementType:
+    """
+    声明类型
+    """
+    STATEMENT_INSERT = 1
+    STATEMENT_SELECT = 2
+
+
+class ExecuteResult:
+    """
+    执行结果
+    """
+    EXECUTE_SUCCESS = 0
+    EXECUTE_TABLE_FULL = 1
+
 
 ID_SIZE = 4
 USERNAME_SIZE = 32
@@ -35,24 +62,25 @@ class Row:
 class Table:
     def __init__(self):
         self.num_rows = 0
-        self.pages = [None] * TABLE_MAX_PAGES
+        self.pages = [None for _ in range(TABLE_MAX_PAGES)]
 
 
 def print_row(row):
     print(f"({row.id}, {row.username}, {row.email})")
 
 
-def serialize_row(source, destination):
-    struct.pack_into("I32s255s", destination, 0, source.id, source.username.encode("utf-8"), source.email.encode("utf-8"))
+def serialize_row(source: Row, destination):
+    struct.pack_into(STRUCT_PACK_FMT, destination, 0, source.id, source.username.encode("utf-8"),
+                     source.email.encode("utf-8"))
 
 
-def deserialize_row(source, destination):
-    (destination.id, username_bytes, email_bytes) = struct.unpack_from("I32s255s", source)
+def deserialize_row(source, destination: Row):
+    (destination.id, username_bytes, email_bytes) = struct.unpack_from(STRUCT_PACK_FMT, source)
     destination.username = username_bytes.decode("utf-8").rstrip("\x00")
     destination.email = email_bytes.decode("utf-8").rstrip("\x00")
 
 
-def row_slot(table, row_num):
+def row_slot(table: Table, row_num: int):
     page_num = row_num // ROWS_PER_PAGE
     page = table.pages[page_num]
     if page is None:
@@ -62,11 +90,11 @@ def row_slot(table, row_num):
     return memoryview(page)[byte_offset:byte_offset + ROW_SIZE]
 
 
-def new_table():
+def new_table() -> Table:
     return Table()
 
 
-def free_table(table):
+def free_table(table) -> None:
     for page in table.pages:
         if page is not None:
             del page
@@ -78,6 +106,12 @@ class InputBuffer:
         self.buffer = None
 
 
+class Statement:
+    def __init__(self):
+        self.type = None
+        self.row_to_insert = None
+
+
 def print_prompt():
     sys.stdout.write("db > ")
     sys.stdout.flush()
@@ -87,38 +121,38 @@ def read_input(input_buffer):
     input_buffer.buffer = input()
 
 
-def do_meta_command(input_buffer, table):
+def do_meta_command(input_buffer, table: Table):
     if input_buffer.buffer == ".exit":
         free_table(table)
         sys.exit(0)
     else:
-        return META_COMMAND_UNRECOGNIZED_COMMAND
+        return MetaCommandResult.META_COMMAND_UNRECOGNIZED_COMMAND
 
 
-def prepare_statement(input_buffer, statement):
+def prepare_statement(input_buffer: InputBuffer, statement: Statement) -> int:
     if input_buffer.buffer.startswith("insert"):
-        statement.type = "INSERT"
+        statement.type = StatementType.STATEMENT_INSERT
         args = input_buffer.buffer.split()
         if len(args) < 4:
-            return PREPARE_SYNTAX_ERROR
+            return PrepareResult.PREPARE_SYNTAX_ERROR
         statement.row_to_insert = Row(int(args[1]), args[2], args[3])
-        return PREPARE_SUCCESS
-    elif input_buffer.buffer == "select":
-        statement.type = "SELECT"
-        return PREPARE_SUCCESS
+        return PrepareResult.PREPARE_SUCCESS
+    elif input_buffer.buffer.startswith('select'):
+        statement.type = StatementType.STATEMENT_SELECT
+        return PrepareResult.PREPARE_SUCCESS
     else:
-        return PREPARE_UNRECOGNIZED_STATEMENT
+        return PrepareResult.PREPARE_UNRECOGNIZED_STATEMENT
 
 
-def execute_insert(statement, table):
+def execute_insert(statement, table) -> int:
     if table.num_rows >= TABLE_MAX_ROWS:
-        return EXECUTE_TABLE_FULL
+        return ExecuteResult.EXECUTE_TABLE_FULL
 
     row_to_insert = statement.row_to_insert
     serialize_row(row_to_insert, row_slot(table, table.num_rows))
     table.num_rows += 1
 
-    return EXECUTE_SUCCESS
+    return ExecuteResult.EXECUTE_SUCCESS
 
 
 def execute_select(statement, table):
@@ -126,13 +160,13 @@ def execute_select(statement, table):
         row = Row(0, "", "")
         deserialize_row(row_slot(table, i), row)
         print_row(row)
-    return EXECUTE_SUCCESS
+    return ExecuteResult.EXECUTE_SUCCESS
 
 
-def execute_statement(statement, table):
-    if statement.type == "INSERT":
+def execute_statement(statement: Statement, table: Table):
+    if statement.type == StatementType.STATEMENT_INSERT:
         return execute_insert(statement, table)
-    elif statement.type == "SELECT":
+    elif statement.type == StatementType.STATEMENT_SELECT:
         return execute_select(statement, table)
 
 
@@ -145,21 +179,21 @@ def main():
         read_input(input_buffer)
 
         if input_buffer.buffer[0] == ".":
-            if do_meta_command(input_buffer, table) == META_COMMAND_SUCCESS:
+            if do_meta_command(input_buffer, table) == MetaCommandResult.META_COMMAND_SUCCESS:
                 continue
 
-        statement = {"type": None, "row_to_insert": None}
+        statement = Statement()
         prepare_result = prepare_statement(input_buffer, statement)
 
-        if prepare_result == PREPARE_SUCCESS:
+        if prepare_result == PrepareResult.PREPARE_SUCCESS:
             execute_result = execute_statement(statement, table)
-            if execute_result == EXECUTE_SUCCESS:
+            if execute_result == ExecuteResult.EXECUTE_SUCCESS:
                 print("Executed.")
-            elif execute_result == EXECUTE_TABLE_FULL:
+            elif execute_result == ExecuteResult.EXECUTE_TABLE_FULL:
                 print("Error: Table full.")
-        elif prepare_result == PREPARE_SYNTAX_ERROR:
+        elif prepare_result == PrepareResult.PREPARE_SYNTAX_ERROR:
             print("Syntax error. Could not parse statement.")
-        elif prepare_result == PREPARE_UNRECOGNIZED_STATEMENT:
+        elif prepare_result == PrepareResult.PREPARE_UNRECOGNIZED_STATEMENT:
             print(f"Unrecognized keyword at start of '{input_buffer.buffer}'.")
 
 
