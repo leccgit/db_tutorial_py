@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 设置变量，指定 line length
+
+# 使用 isort、autoflake 和 black 进行校验
+isort .

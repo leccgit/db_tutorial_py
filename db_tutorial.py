@@ -1,9 +1,11 @@
+import os
 import struct
 import sys
-from typing import Optional
+from typing import List, Optional
 
 # 32位整数（I），32字节的字符串（32s），255字节的字符串（255s）
 STRUCT_PACK_FMT = 'I32s255s'
+EXIT_FAILURE = 0
 
 
 class MetaCommandResult:
@@ -64,46 +66,149 @@ class Row:
         self.username = username
         self.email = email
 
+    def __repr__(self):
+        return f"({self.id}, {self.username}, {self.email})"
+
+    def serialize_row(self, destination):
+        """
+        将行记录，进行序列化操作
+        :param destination:
+        :return:
+        """
+        struct.pack_into(STRUCT_PACK_FMT, destination, 0, self.id, self.username.encode("utf-8"),
+                         self.email.encode("utf-8"))
+
+    def deserialize_row(self, source):
+        """
+        将行记录，进行反序列化操作
+        :param source:
+        :return:
+        """
+        (self.id, username_bytes, email_bytes) = struct.unpack_from(STRUCT_PACK_FMT, source)
+        self.username = username_bytes.decode("utf-8").rstrip("\x00")
+        self.email = email_bytes.decode("utf-8").rstrip("\x00")
+
+
+class Pager:
+    def __init__(self, file_descriptor: int, file_length: int, filename: str):
+        self.file_descriptor = file_descriptor
+        self.file_length = file_length
+        self.pages: List = [None] * TABLE_MAX_PAGES
+        self.filename = filename
+
+    def get_page(self, page_num: int) -> bytearray:
+        if page_num > TABLE_MAX_PAGES:
+            print(f"Tried to fetch page number out of bounds. {page_num} > {TABLE_MAX_PAGES}")
+            exit(EXIT_FAILURE)
+
+        if self.pages[page_num] is None:
+            page = bytearray(PAGE_SIZE)
+            num_pages = self.file_length // PAGE_SIZE
+
+            if self.file_length % PAGE_SIZE:
+                num_pages += 1
+
+            if page_num <= num_pages:
+                os.lseek(self.file_descriptor, page_num * PAGE_SIZE, os.SEEK_SET)
+                bytes_read = os.read(self.file_descriptor, PAGE_SIZE)
+                if bytes_read == -1:
+                    print(f"Error reading file: {self.filename}")
+                    exit()
+
+            self.pages[page_num] = page
+
+        return self.pages[page_num]
+
+    def pager_flush(self, page_num: int, size: int):
+        if self.pages[page_num] is None:
+            print("Tried to flush null page")
+            exit(EXIT_FAILURE)
+
+        offset = os.lseek(self.file_descriptor, page_num * PAGE_SIZE, os.SEEK_SET)
+
+        if offset == -1:
+            print(f"Error seeking:")
+            exit(EXIT_FAILURE)
+
+        bytes_written = os.write(self.file_descriptor, self.pages[page_num][:size])
+
+        if bytes_written == -1:
+            print(f"Error writing: ")
+            exit(EXIT_FAILURE)
+
 
 class Table:
     def __init__(self):
         self.num_rows = 0
-        self.pages = [None for _ in range(TABLE_MAX_PAGES)]
+        self.pager: Optional[Pager] = None
+
+    def init_self(self, pager: Pager, num_rows: int):
+        """
+        执行表的初始化操作
+        :param pager:
+        :param num_rows:
+        :return:
+        """
+        self.pager = pager
+        self.num_rows = num_rows
+
+    def row_slot(self, row_num: int):
+        """
+        获取行记录，在表中的插入位置
+        :param row_num:
+        :return:
+        """
+        page_num = row_num // ROWS_PER_PAGE  # 当前行记录，所在的页面
+        page = self.get_page(page_num)
+        row_offset = row_num % ROWS_PER_PAGE
+        byte_offset = row_offset * ROW_SIZE
+        return memoryview(page)[byte_offset:byte_offset + ROW_SIZE]
+
+    def get_page(self, page_num: int) -> bytearray:
+        return self.pager.get_page(page_num)
 
 
-def print_row(row):
-    print(f"({row.id}, {row.username}, {row.email})")
+def db_open(filename: str = None) -> Table:
+    pager = pager_open(filename)
+    num_rows = pager.file_length // ROW_SIZE
+    table = Table()
+    table.init_self(pager, num_rows)
+    return table
 
 
-def serialize_row(source: Row, destination):
-    struct.pack_into(STRUCT_PACK_FMT, destination, 0, source.id, source.username.encode("utf-8"),
-                     source.email.encode("utf-8"))
+def pager_open(filename: str = None) -> Pager:
+    fd = os.open(
+        filename,
+        os.O_RDWR | os.O_CREAT,
+    )
+    file_length = os.lseek(fd, 0, os.SEEK_END)
+    pager = Pager(fd, file_length, filename)
+    return pager
 
 
-def deserialize_row(source, destination: Row):
-    (destination.id, username_bytes, email_bytes) = struct.unpack_from(STRUCT_PACK_FMT, source)
-    destination.username = username_bytes.decode("utf-8").rstrip("\x00")
-    destination.email = email_bytes.decode("utf-8").rstrip("\x00")
+def db_close(table: Table):
+    pager = table.pager
+    num_full_pages = table.num_rows // ROWS_PER_PAGE
 
+    for i in range(num_full_pages):
+        if pager.pages[i] is not None:
+            pager.pager_flush(i, pager.pages[i])
+            pager.pages[i] = None
 
-def row_slot(table: Table, row_num: int):
-    page_num = row_num // ROWS_PER_PAGE
-    page = table.pages[page_num]
-    if page is None:
-        page = table.pages[page_num] = bytearray(PAGE_SIZE)
-    row_offset = row_num % ROWS_PER_PAGE
-    byte_offset = row_offset * ROW_SIZE
-    return memoryview(page)[byte_offset:byte_offset + ROW_SIZE]
+    num_additional_rows = table.num_rows % ROWS_PER_PAGE
+    if num_additional_rows > 0:
+        page_num = num_full_pages
+        if pager.pages[page_num] is not None:
+            pager.pager_flush(page_num, pager.pages[page_num][:num_additional_rows * ROW_SIZE])
+            pager.pages[page_num] = None
 
+    os.close(pager.file_descriptor)
+    for i in range(TABLE_MAX_PAGES):
+        page = pager.pages[i]
+        if page:
+            pager.pages[i] = None
 
-def new_table() -> Table:
-    return Table()
-
-
-def free_table(table) -> None:
-    for page in table.pages:
-        if page is not None:
-            del page
+    del pager
     del table
 
 
@@ -129,7 +234,6 @@ def read_input(input_buffer):
 
 def do_meta_command(input_buffer, table: Table):
     if input_buffer.buffer == ".exit":
-        free_table(table)
         sys.exit(0)
     else:
         return MetaCommandResult.META_COMMAND_UNRECOGNIZED_COMMAND
@@ -166,12 +270,19 @@ def prepare_insert(input_buffer: InputBuffer, statement: Statement) -> int:
     return PrepareResult.PREPARE_SUCCESS
 
 
+def execute_statement(statement: Statement, table: Table):
+    if statement.type == StatementType.STATEMENT_INSERT:
+        return execute_insert(statement, table)
+    elif statement.type == StatementType.STATEMENT_SELECT:
+        return execute_select(statement, table)
+
+
 def execute_insert(statement, table) -> int:
     if table.num_rows >= TABLE_MAX_ROWS:
         return ExecuteResult.EXECUTE_TABLE_FULL
 
     row_to_insert = statement.row_to_insert
-    serialize_row(row_to_insert, row_slot(table, table.num_rows))
+    row_to_insert.serialize_row(table.row_slot(table.num_rows))
     table.num_rows += 1
 
     return ExecuteResult.EXECUTE_SUCCESS
@@ -180,20 +291,13 @@ def execute_insert(statement, table) -> int:
 def execute_select(statement, table):
     for i in range(table.num_rows):
         row = Row(0, "", "")
-        deserialize_row(row_slot(table, i), row)
-        print_row(row)
+        row.deserialize_row(table.row_slot(i))
+        print(row)
     return ExecuteResult.EXECUTE_SUCCESS
 
 
-def execute_statement(statement: Statement, table: Table):
-    if statement.type == StatementType.STATEMENT_INSERT:
-        return execute_insert(statement, table)
-    elif statement.type == StatementType.STATEMENT_SELECT:
-        return execute_select(statement, table)
-
-
 def main():
-    table = new_table()
+    table = db_open()
     input_buffer = InputBuffer()
 
     while True:
