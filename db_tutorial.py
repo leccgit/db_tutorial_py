@@ -137,12 +137,12 @@ class Pager:
         if offset == -1:
             print(f"Error seeking:")
             exit(EXIT_FAILURE)
-        print("打印测试: ", self.pages[page_num])
+        # print("打印测试: ", self.pages[page_num])
         bytes_written = os.write(self.file_descriptor, self.pages[page_num])
         if bytes_written == -1:
             print(f"Error writing: ")
             exit(EXIT_FAILURE)
-        print(f"Bytes written: {bytes_written}")
+        # print(f"Bytes written: {bytes_written}")
 
 
 class Table:
