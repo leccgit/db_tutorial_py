@@ -1,7 +1,7 @@
 import os
 import struct
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # 32位整数（I），32字节的字符串（32s），255字节的字符串（255s）
 STRUCT_PACK_FMT = 'I32s255s'
@@ -77,12 +77,8 @@ def serialize_row(destination, source: Row):
     :param destination:
     :return:
     """
-    # mv = memoryview(destination)
     struct.pack_into(STRUCT_PACK_FMT, destination, 0, source.id, source.username.encode("utf-8"),
                      source.email.encode("utf-8"))
-    # destination[:] = mv
-
-    # print(destination)
 
 
 def deserialize_row(source: bytearray) -> Row:
@@ -143,10 +139,10 @@ class Pager:
             exit(EXIT_FAILURE)
         print("打印测试: ", self.pages[page_num])
         bytes_written = os.write(self.file_descriptor, self.pages[page_num])
-
         if bytes_written == -1:
             print(f"Error writing: ")
             exit(EXIT_FAILURE)
+        print(f"Bytes written: {bytes_written}")
 
 
 class Table:
@@ -175,7 +171,7 @@ class Table:
         return memoryview(page)[byte_st_offset:byte_ed_offset]
 
     @staticmethod
-    def row_slot_index(row_num: int):
+    def row_slot_index(row_num: int) -> Tuple[int, int]:
         row_offset = row_num % ROWS_PER_PAGE
         byte_offset = row_offset * ROW_SIZE
         return byte_offset, byte_offset + ROW_SIZE
@@ -214,9 +210,6 @@ def db_close(table: Table):
         page = pager.pages[i]
         if page:
             pager.pages[i] = None
-
-    del pager
-    del table
 
 
 class Statement:
@@ -312,6 +305,9 @@ def execute_select(statement: Statement, table):
 
 
 def main():
+    # vim mydb.db
+    # :%!xxd
+
     # argv = sys.argv
     # if len(argv) < 2:
     #     print("Must supply a database filename.\n")
