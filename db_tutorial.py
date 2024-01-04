@@ -1,7 +1,6 @@
 import os
 import struct
 import sys
-from copy import deepcopy
 from typing import List, Optional
 
 # 32位整数（I），32字节的字符串（32s），255字节的字符串（255s）
@@ -70,27 +69,33 @@ class Row:
     def __repr__(self):
         return f"({self.id}, {self.username}, {self.email})"
 
-    def serialize_row(self, destination: bytearray):
-        """
-        将行记录，进行序列化操作
-        :param destination:
-        :return:
-        """
-        # new_byte = deepcopy(destination)
-        struct.pack_into(STRUCT_PACK_FMT, destination, 0, self.id, self.username.encode("utf-8"),
-                         self.email.encode("utf-8"))
-        # destination[::] = new_byte
-        print(destination)
 
-    def deserialize_row(self, source: bytearray):
-        """
-        将行记录，进行反序列化操作
-        :param source:
-        :return:
-        """
-        (self.id, username_bytes, email_bytes) = struct.unpack_from(STRUCT_PACK_FMT, source)
-        self.username = username_bytes.decode("utf-8").rstrip("\x00")
-        self.email = email_bytes.decode("utf-8").rstrip("\x00")
+def serialize_row(destination, source: Row):
+    """
+    将行记录，进行序列化操作
+    :param source:
+    :param destination:
+    :return:
+    """
+    # mv = memoryview(destination)
+    struct.pack_into(STRUCT_PACK_FMT, destination, 0, source.id, source.username.encode("utf-8"),
+                     source.email.encode("utf-8"))
+    # destination[:] = mv
+
+    # print(destination)
+
+
+def deserialize_row(source: bytearray) -> Row:
+    """
+    将行记录，进行反序列化操作
+    :param source:
+    :return:
+    """
+    row = Row()
+    (row.id, username_bytes, email_bytes) = struct.unpack_from(STRUCT_PACK_FMT, source)
+    row.username = username_bytes.decode("utf-8").rstrip("\x00")
+    row.email = email_bytes.decode("utf-8").rstrip("\x00")
+    return row
 
 
 class Pager:
@@ -165,14 +170,18 @@ class Table:
         :param row_num: 数据库保留的行数
         :return:
         """
-        page_num = row_num // ROWS_PER_PAGE
-        page = self.get_page(page_num)
+        page = self.get_page(row_num)
+        byte_st_offset, byte_ed_offset = self.row_slot_index(row_num)
+        return memoryview(page)[byte_st_offset:byte_ed_offset]
+
+    @staticmethod
+    def row_slot_index(row_num: int):
         row_offset = row_num % ROWS_PER_PAGE
         byte_offset = row_offset * ROW_SIZE
-        row_view = page[byte_offset:byte_offset + ROW_SIZE]
-        return row_view
+        return byte_offset, byte_offset + ROW_SIZE
 
-    def get_page(self, page_num: int) -> bytearray:
+    def get_page(self, row_num: int) -> bytearray:
+        page_num = row_num // ROWS_PER_PAGE
         return self.pager.get_page(page_num)
 
 
@@ -289,20 +298,16 @@ def execute_insert(statement: Statement, table: Table) -> int:
     if table.num_rows >= TABLE_MAX_ROWS:
         return ExecuteResult.EXECUTE_TABLE_FULL
 
-    row_to_insert = statement.row_to_insert
-    before_insert_slot = table.row_slot(table.num_rows)
-    row_to_insert.serialize_row(before_insert_slot)
-    print('after ',before_insert_slot)
+    serialize_row(table.row_slot(table.num_rows), statement.row_to_insert)
     table.num_rows += 1
 
     return ExecuteResult.EXECUTE_SUCCESS
 
 
 def execute_select(statement: Statement, table):
-    for i in range(table.num_rows):
-        row = Row()
-        row.deserialize_row(table.row_slot(i))
-        print(row)
+    for num in range(table.num_rows):
+        row = deserialize_row(table.row_slot(num))
+        print(str(row))
     return ExecuteResult.EXECUTE_SUCCESS
 
 
@@ -311,7 +316,6 @@ def main():
     # if len(argv) < 2:
     #     print("Must supply a database filename.\n")
     #     exit(EXIT_FAILURE)
-    # print(argv)
     # filename = argv[1]
     filename = 'mydb.db'
     table = db_open(filename)
