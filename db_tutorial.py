@@ -1,7 +1,7 @@
 import os
 import struct
 import sys
-from typing import List, Optional, Tuple
+from typing import List
 
 # 32位整数（I），32字节的字符串（32s），255字节的字符串（255s）
 STRUCT_PACK_FMT = 'I32s255s'
@@ -70,28 +70,15 @@ class Row:
         return f"({self.id}, {self.username}, {self.email})"
 
 
-def serialize_row(destination, source: Row):
-    """
-    将行记录，进行序列化操作
-    :param source:
-    :param destination:
-    :return:
-    """
-    struct.pack_into(STRUCT_PACK_FMT, destination, 0, source.id, source.username.encode("utf-8"),
-                     source.email.encode("utf-8"))
+class Statement:
+    def __init__(self):
+        self.type = None
+        self.row_to_insert = Row()
 
 
-def deserialize_row(source: bytearray) -> Row:
-    """
-    将行记录，进行反序列化操作
-    :param source:
-    :return:
-    """
-    row = Row()
-    (row.id, username_bytes, email_bytes) = struct.unpack_from(STRUCT_PACK_FMT, source)
-    row.username = username_bytes.decode("utf-8").rstrip("\x00")
-    row.email = email_bytes.decode("utf-8").rstrip("\x00")
-    return row
+class InputBuffer:
+    def __init__(self):
+        self.buffer = None
 
 
 class Pager:
@@ -137,55 +124,88 @@ class Pager:
         if offset == -1:
             print(f"Error seeking:")
             exit(EXIT_FAILURE)
-        # print("打印测试: ", self.pages[page_num])
         bytes_written = os.write(self.file_descriptor, self.pages[page_num])
         if bytes_written == -1:
             print(f"Error writing: ")
             exit(EXIT_FAILURE)
-        # print(f"Bytes written: {bytes_written}")
 
 
 class Table:
-    def __init__(self):
-        self.num_rows = 0
-        self.pager: Optional[Pager] = None
-
-    def init_self(self, pager: Pager, num_rows: int):
-        """
-        执行表的初始化操作
-        :param pager:
-        :param num_rows:
-        :return:
-        """
+    def __init__(self, pager: Pager, num_rows: int = 0):
         self.pager = pager
         self.num_rows = num_rows
 
-    def row_slot(self, row_num: int):
+
+class Cursor:
+    """
+    游标对象
+    """
+
+    def __init__(self, table: Table, row_num: int = 0, end_of_table: bool = False):
+        self.table = table
+        self.row_num = row_num
+        self.end_of_table = end_of_table
+
+    def cursor_value(self):
         """
         通过行数，来判断当前的数据被插入到那个页面上
-        :param row_num: 数据库保留的行数
         :return:
         """
-        page = self.get_page(row_num)
-        byte_st_offset, byte_ed_offset = self.row_slot_index(row_num)
-        return memoryview(page)[byte_st_offset:byte_ed_offset]
-
-    @staticmethod
-    def row_slot_index(row_num: int) -> Tuple[int, int]:
+        row_num = self.row_num
+        page_num = row_num // ROWS_PER_PAGE
+        page = self.table.pager.get_page(page_num)
         row_offset = row_num % ROWS_PER_PAGE
         byte_offset = row_offset * ROW_SIZE
-        return byte_offset, byte_offset + ROW_SIZE
+        return page + byte_offset
 
-    def get_page(self, row_num: int) -> bytearray:
-        page_num = row_num // ROWS_PER_PAGE
-        return self.pager.get_page(page_num)
+    def cursor_advance(self):
+        """
+        游标前进对象
+        :return:
+        """
+        self.row_num += 1
+        if self.row_num >= self.table.num_rows:
+            self.end_of_table = Table
+
+
+def serialize_row(source: Row, destination):
+    """
+    将行记录，进行序列化操作
+    :param source:
+    :param destination:
+    :return:
+    """
+    struct.pack_into(STRUCT_PACK_FMT, destination, 0, source.id, source.username.encode("utf-8"),
+                     source.email.encode("utf-8"))
+
+
+def deserialize_row(source: bytearray) -> Row:
+    """
+    将行记录，进行反序列化操作
+    :param source:
+    :return:
+    """
+    row = Row()
+    (row.id, username_bytes, email_bytes) = struct.unpack_from(STRUCT_PACK_FMT, source)
+    row.username = username_bytes.decode("utf-8").rstrip("\x00")
+    row.email = email_bytes.decode("utf-8").rstrip("\x00")
+    return row
+
+
+def table_start(table: Table) -> Cursor:
+    cursor = Cursor(table, row_num=0, end_of_table=bool(table.num_rows == 0))
+    return cursor
+
+
+def table_end(table: Table) -> Cursor:
+    cursor = Cursor(table, row_num=0, end_of_table=True)
+    return cursor
 
 
 def db_open(filename: str) -> Table:
     pager = Pager(filename)
     num_rows = pager.file_length // ROW_SIZE
-    table = Table()
-    table.init_self(pager, num_rows)
+    table = Table(pager, num_rows)
     return table
 
 
@@ -212,20 +232,9 @@ def db_close(table: Table):
             pager.pages[i] = None
 
 
-class Statement:
-    def __init__(self):
-        self.type = None
-        self.row_to_insert = Row()
-
-
 def print_prompt():
     sys.stdout.write("db > ")
     sys.stdout.flush()
-
-
-class InputBuffer:
-    def __init__(self):
-        self.buffer = None
 
 
 def read_input(input_buffer: InputBuffer):
@@ -264,10 +273,7 @@ def prepare_insert(input_buffer: InputBuffer, statement: Statement) -> int:
     email = tokens[3] if len(tokens) > 3 else None
     if id_string is None or username is None or email is None:
         return PrepareResult.PREPARE_SYNTAX_ERROR
-    try:
-        t_id = int(id_string)
-    except Exception:
-        return PrepareResult.PREPARE_NEGATIVE_ID
+    t_id = int(id_string)
     if t_id < 0:
         return PrepareResult.PREPARE_NEGATIVE_ID
     if len(username) > COLUMN_USERNAME_SIZE:
@@ -291,16 +297,20 @@ def execute_insert(statement: Statement, table: Table) -> int:
     if table.num_rows >= TABLE_MAX_ROWS:
         return ExecuteResult.EXECUTE_TABLE_FULL
 
-    serialize_row(table.row_slot(table.num_rows), statement.row_to_insert)
+    cursor = table_end(table)
+    serialize_row(statement.row_to_insert, cursor.cursor_value())
     table.num_rows += 1
 
     return ExecuteResult.EXECUTE_SUCCESS
 
 
-def execute_select(statement: Statement, table):
-    for num in range(table.num_rows):
-        row = deserialize_row(table.row_slot(num))
+def execute_select(statement: Statement, table: Table):
+    cursor = table_start(table)
+    while not cursor.end_of_table:
+        row = deserialize_row(cursor.cursor_value())
         print(str(row))
+        cursor.cursor_advance()
+
     return ExecuteResult.EXECUTE_SUCCESS
 
 
