@@ -231,19 +231,10 @@ def db_close(table: Table):
             pager.pages[i] = None
 
 
-def print_prompt():
-    sys.stdout.write("db > ")
-    sys.stdout.flush()
-
-
-def read_input(input_buffer: InputBuffer):
-    input_buffer.buffer = input()
-
-
 def do_meta_command(input_buffer: InputBuffer, table: Table):
     if input_buffer.buffer == ".exit":
         db_close(table)
-        sys.exit(0)
+        sys.exit(EXIT_FAILURE)
     else:
         return MetaCommandResult.META_COMMAND_UNRECOGNIZED_COMMAND
 
@@ -327,9 +318,7 @@ def main():
     input_buffer = InputBuffer()
 
     while True:
-        print_prompt()
-        read_input(input_buffer)
-
+        input_buffer.buffer = input()
         if input_buffer.buffer[0] == ".":
             mate_command = do_meta_command(input_buffer, table)
             if mate_command == MetaCommandResult.META_COMMAND_SUCCESS:
