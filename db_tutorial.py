@@ -151,12 +151,11 @@ class Cursor:
         通过行数，来判断当前的数据被插入到那个页面上
         :return:
         """
-        row_num = self.row_num
-        page_num = row_num // ROWS_PER_PAGE
+        page_num = self.row_num // ROWS_PER_PAGE
         page = self.table.pager.get_page(page_num)
-        row_offset = row_num % ROWS_PER_PAGE
+        row_offset = self.row_num % ROWS_PER_PAGE
         byte_offset = row_offset * ROW_SIZE
-        return page + byte_offset
+        return memoryview(page)[byte_offset: byte_offset + ROW_SIZE]
 
     def cursor_advance(self):
         """
@@ -179,7 +178,7 @@ def serialize_row(source: Row, destination):
                      source.email.encode("utf-8"))
 
 
-def deserialize_row(source: bytearray) -> Row:
+def deserialize_row(source) -> Row:
     """
     将行记录，进行反序列化操作
     :param source:
@@ -198,7 +197,7 @@ def table_start(table: Table) -> Cursor:
 
 
 def table_end(table: Table) -> Cursor:
-    cursor = Cursor(table, row_num=0, end_of_table=True)
+    cursor = Cursor(table, row_num=table.num_rows, end_of_table=True)
     return cursor
 
 
